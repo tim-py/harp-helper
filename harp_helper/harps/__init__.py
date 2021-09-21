@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from importlib import import_module
 import logging
 import pkgutil
-import re
 from tabulate import tabulate
 
 from harp_helper import music
@@ -50,6 +49,10 @@ class Harmonica(ABC):
     @classmethod
     def types(cls):
         return {subclass.harmonica_type: subclass.harmonica_description for subclass in cls.__subclasses__()}
+
+    @property
+    def key(self):
+        return self._key.notation
 
     @property
     def flat_key_signature(self) -> bool:

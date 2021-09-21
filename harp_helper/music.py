@@ -1,6 +1,7 @@
 """
 music.py - General music functions
 """
+import logging
 import re
 
 FLAT_NOTE_ORDER = ("c", "des", "d", "ees", "e", "f", "ges", "g", "aes", "a", "bes", "b")
@@ -94,6 +95,11 @@ def find_note_index(notation: str) -> int:
     if len(values) != 1:
         raise ValueError(f"Notation '{notation}' is not valid")
     return values[0]
+
+def get_key_from_control_string(control_string: str):
+
+    if not (match := re.search(r"^\s*(\S+)\s+\\(\S+)", control_string)):
+        return None
 
 
 class NoteParser:
@@ -254,18 +260,26 @@ class KeySignature:
 class MusicExpression:
 
     def __init__(self, notation: str, key: str):
+        self.logger = logging.getLogger(__name__)
         self._key: KeySignature = KeySignature(key)
         self._notes: list[int] = find_note_indices(notation)
+        self.logger.debug(f"loaded notation='{notation}', key={key}")
 
     def transpose_half_steps(self, steps):
+        self.logger.debug(f"transposing half-steps={steps}")
         for index in range(len(self._notes)):
             self._notes[index] += steps
             if self._notes[index] < 0 or self._notes[index] not in self._key.chromatic_index:
                 raise ValueError("Transposition is out of range")
 
     def transpose_to_key(self, key: str, direction: (None, str) = None):
+        self.logger.debug(f"transposing key from {self.key} to {key}")
         self.transpose_half_steps(self._key.get_transposition_half_steps(key, direction))
         self._key = KeySignature(key)
+
+    @property
+    def key(self):
+        return self._key.key
 
     @property
     def notation(self) -> str:
@@ -280,165 +294,3 @@ class MusicExpression:
     @property
     def scale_notation_list(self) -> list[str]:
         return [self._key.get_scale_notation(index) for index in self._notes]
-
-# \\\\\\\\\\\\\\\\ bye-bye /////////////
-# def generate_scale_notes(note_order: (list[str], tuple[str]) = SHARP_NOTE_ORDER,
-#                          start: (None, str) = None, end: (None, str) = None):
-#     if start is None:
-#         start_flag = True
-#     else:
-#         start_flag = False
-#     for octave in range(10):
-#         for note_index in range(len(note_order)):
-#             current_enharmonics = (
-#                 f"{FLAT_NOTE_ORDER[note_index]}{octave}",
-#                 f"{SHARP_NOTE_ORDER[note_index]}{octave}"
-#             )
-#             if start in current_enharmonics:
-#                 start_flag = True
-#             if start_flag:
-#                 yield f"{note_order[note_index]}{octave}"
-#             if end in current_enharmonics:
-#                 return
-#     return
-#
-#
-# def get_note_index(note):
-#     return MusicNote(note).index
-#
-#
-# def is_flat_key_signature(key):
-#     note = MusicNote(key)
-#     if note.sharp_flat == "es" or (note.letter == "f" and note.sharp_flat == ""):
-#         return True
-#     return False
-#
-#
-# def get_note_order(key):
-#     if is_flat_key_signature(key):
-#         return FLAT_NOTE_ORDER
-#     else:
-#         return SHARP_NOTE_ORDER
-#
-#
-# def transpose(notes: list[str], half_steps, key: (None, str) = None) -> list[str]:
-#     music_notes = [MusicNote(note, key=key) for note in notes]
-#     for note in music_notes:
-#         note.transpose(half_steps)
-#     return [note.value for note in music_notes]
-#
-#
-# def transpose_to_key(notes: list[str], source_key: str, dest_key: str, direction: (None, str) = None) -> list[str]:
-#     music_notes = [MusicNote(note, key=source_key) for note in notes]
-#     for note in music_notes:
-#         note.transpose_to_key(dest_key, direction=direction)
-#     return [note.value for note in music_notes]
-#
-#
-# class MusicNote:
-#
-#     note_regex = re.compile(r"^([a-g])(es|is|)(\d+|'+|,+|)$")
-#
-#     def __init__(self, notation: str, key: (None, str) = None):
-#         self.notation: str = ""
-#         self.letter: str = ""
-#         self.sharp_flat: str = ""
-#         self.octave: str = ""
-#         self.key = None
-#         self.set_note(notation, key)
-#
-#     @classmethod
-#     def parse_note(cls, notation):
-#         try:
-#             letter, sharp_flat, octave = cls.note_regex.search(notation).groups()
-#         except AttributeError:
-#             raise ValueError(f"Failed to parse note '{notation}'") from None
-#         return letter, sharp_flat, octave
-#
-#     @classmethod
-#     def get_musical_name(cls, notation):
-#         letter, sharp_flat, _ = cls.parse_note(notation)
-#         sf_symbol = {'es': 'b', 'is': '#', '': ''}
-#         return f"{letter.upper()}{sf_symbol[sharp_flat]}"
-#
-#     def set_note(self, notation: str, key: (None, str) = None):
-#         self.notation: str = notation
-#         if key is None:
-#             key = self.notation
-#         self.letter, self.sharp_flat, self.octave = self.parse_note(notation)
-#         key_letter, key_sharp_flat, _ = self.parse_note(key)
-#         self.key = key_letter + key_sharp_flat
-#
-#     @property
-#     def note_order(self):
-#         return get_note_order(self.key)
-#
-#     @property
-#     def numeric_octave(self):
-#         if re.fullmatch(r"\d+", self.octave):
-#             return self.octave
-#         else:
-#             return PIPE_NOTATION.index(self.octave)
-#
-#     @property
-#     def relative_notation(self):
-#         return f"{self.letter}{self.sharp_flat}"
-#
-#     @property
-#     def musical_relative_name(self) -> str:
-#         return self.get_musical_name(self.relative_notation)
-#
-#     @property
-#     def fullname(self) -> str:
-#         return f"{self.musical_relative_name}{self.numeric_octave}"
-#
-#     @property
-#     def value(self):
-#         """Normalizes the note value to numeric octave"""
-#         return f"{self.letter}{self.sharp_flat}{self.numeric_octave}"
-#
-#     @property
-#     def index(self):
-#         for note_order in (SHARP_NOTE_ORDER, FLAT_NOTE_ORDER):
-#             if self.relative_notation in note_order:
-#                 scale = list(generate_scale_notes(note_order=note_order))
-#                 if self.value in scale:
-#                     return scale.index(self.value)
-#         raise ValueError(f"Unable to get the note index for {self.value}")
-#
-#     def transpose_to_key(self, key: str, direction: (None, str) = None) -> str:
-#
-#         current_index = self.note_order.index(self.key)
-#         new_index = MusicNote(key).note_order.index(key)
-#
-#         half_steps = new_index - current_index
-#
-#         if direction is None:
-#             simple = new_index - current_index
-#             loop_up = (new_index + len(self.note_order)) - current_index
-#             loop_down = (new_index - len(self.note_order)) - current_index
-#             direction_table = {abs(d): d for d in (simple, loop_up, loop_down)}
-#             half_steps = direction_table[min(direction_table.keys())]
-#         elif direction.lower() == "up":
-#             if half_steps < 0:
-#                 half_steps += len(self.note_order)
-#         elif direction.lower() == "down":
-#             if half_steps > 0:
-#                 half_steps += (len(self.note_order) - half_steps)
-#
-#         self.transpose(half_steps)
-#         self.key = key
-#
-#         return self.value
-#
-#     def transpose(self, half_steps: int):
-#         new_note = list(generate_scale_notes(self.note_order))[self.index + half_steps]
-#         self.set_note(notation=new_note)
-#
-#     def __str__(self):
-#         return self.value
-
-
-# if __name__ == "__main__":
-#     n = MusicNote('g4', 'c')
-#     n.transpose_to_key("a", "up")

@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+import logging
 import os
 import sys
 import traceback
@@ -6,17 +8,34 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QFileDialog, QMe
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import QRect
 from PyQt6 import uic
-from tabulate import tabulate
 
 
 from harp_helper import constants
 from harp_helper.harps import Harmonica
 from harp_helper import music
 
+logger = logging.getLogger('harp')
+
 
 MAX_FILE_LABEL_TEXT = 65
 WINDOW_MARGIN = 20
 WINDOW_FOOTER = 20
+MINOR_KEY_SIGNATURES = {
+    'a': 'c',
+    'ais': 'cis',
+    'bes': 'des',
+    'b': 'd',
+    'c': 'ees',
+    'cis': 'e',
+    'd': 'f',
+    'dis': 'fis',
+    'ees': 'ges',
+    'e': 'g',
+    'f': 'aes',
+    'fis': 'a',
+    'g': 'bes',
+    'gis': 'b'
+}
 
 current_path = os.path.dirname(__file__)
 main_ui = os.path.join(current_path, 'ui', 'main_window.ui')
@@ -81,9 +100,16 @@ class HarpHelperUi(QMainWindow):
         saveAction.triggered.connect(self.save_output_dialog)
 
         # HelpNotation
-        notationAction = QAction("Notation", self)
+        notationAction = QAction("Notation...", self)
         notationAction.setStatusTip("Music expression notation help")
         notationAction.triggered.connect(self.help_notation_message)
+
+        # Debug
+        self._debugAction = QAction("Debug", self)
+        self._debugAction.setCheckable(True)
+        self._debugAction.setChecked(False)
+        self._debugAction.setStatusTip("Toggle debug mode")
+        self._debugAction.toggled.connect(self.toggle_debug)
 
         self.statusBar()
 
@@ -93,6 +119,7 @@ class HarpHelperUi(QMainWindow):
         fileMenu.addAction(saveAction)
         helpMenu = mainMenu.addMenu('Help')
         helpMenu.addAction(notationAction)
+        helpMenu.addAction(self._debugAction)
         self.setMenuBar(mainMenu)
 
     def main_window_connections(self):
@@ -212,12 +239,23 @@ class HarpHelperUi(QMainWindow):
             harmonica_key=self.harpKeyBox.currentData()
         )
 
+        if self.sourceKeyCheckBox.isChecked():
+            source_key = self.sourceKeyBox.currentData()
+        else:
+            source_key = harp.key
+        logger.debug(f"initial source key is {source_key}")
         details = []
-        for source_notes in self.generate_tab_notation_from_source():
+        for music_data in self.generate_music_data_structure_from_source():
 
-            expression = music.MusicExpression(source_notes, key=self.sourceKeyBox.currentData())
+            if music_data.key is not None:
+                source_key = music_data.key
+                logger.debug(f"setting source key to {source_key}")
+            source_notes = " ".join(music_data.events)
+
+            expression = music.MusicExpression(source_notes, key=source_key)
 
             if self.transposeSpinner.value() != 0:
+                logger.debug(f"transposing half-steps={self.transposeSpinner.value()}")
                 expression.transpose_half_steps(self.transposeSpinner.value())
 
             if self.transposeDownButton.isChecked():
@@ -226,7 +264,10 @@ class HarpHelperUi(QMainWindow):
                 direction = "up"
             else:
                 direction = "closest"
-            if self.sourceKeyCheckBox.isChecked():
+            if source_key != harp.key:
+                logger.debug(f"transposing from key {expression.key}"
+                             f" to key {self.harpKeyBox.currentData()}"
+                             f" direction: {direction}")
                 expression.transpose_to_key(
                     key=self.harpKeyBox.currentData(),
                     direction=direction
@@ -234,9 +275,10 @@ class HarpHelperUi(QMainWindow):
 
             # Create the notation
             phrase = " &diams; ".join(harp.get_notation(expression.notation_list))
+            logger.debug(f"adding phrase '{phrase}'")
             details.append(phrase.replace("<", "&lt;"))
 
-        self.tabBrowser.setText("\n<br>\n".join(details))
+        self.tabBrowser.setHtml("\n<br>\n".join(details))
 
     @gui_exception_handler
     def report_button_click(self, *args):
@@ -256,7 +298,9 @@ class HarpHelperUi(QMainWindow):
     def tab_file_radio_button_click(self, *args):
         if not self.sourceFileLabel.text().strip():
             self.open_file_dialog()
-        if not self.sourceFileLabel.text().strip():
+        if self.sourceFileLabel.text().strip():
+            self.expressionEdit.setEnabled(False)
+        else:
             self.sourceExpressionButton.setChecked(True)
 
     @gui_exception_handler
@@ -267,13 +311,20 @@ class HarpHelperUi(QMainWindow):
         self.close()
 
     @gui_exception_handler
-    def help_notation_message(self):
+    def help_notation_message(self, *args):
         self.open_message(title="Help: Music Notation", message=constants.NOTATION_HELP, html=True)
+
+    @gui_exception_handler
+    def toggle_debug(self, *args):
+        if self._debugAction.isChecked():
+            logging.getLogger().setLevel(logging.DEBUG)
+        else:
+            logging.getLogger().setLevel(logging.INFO)
 
     # \\\\\\\ Helper Functions For Main Window ///////
 
     def generate_tab_notation_from_source(self):
-        """Generator for yielding tab notation"""
+        """Generator for yielding a line of notation"""
         if self.sourceExpressionButton.isChecked():
             yield self.expressionEdit.text()
         else:
@@ -284,6 +335,56 @@ class HarpHelperUi(QMainWindow):
                     if len(notation) > 0:
                         yield line.strip()
                     line = fh.readline()
+
+    def generate_music_data_structure_from_source(self):
+        """Generator for yielding MusicDataClass objects"""
+
+        @dataclass
+        class MusicDataClass:
+            key: str
+            events: list[str]
+
+        key = None
+        for line in self.generate_tab_notation_from_source():
+            logger.debug(f"processing line: {line}")
+            note_events = []
+            event_list = line.split()
+            while len(event_list) > 0:
+
+                # Get the next event
+                event = event_list.pop(0)
+
+                # Check for key signature
+                if event == "\\key":
+                    logger.debug("Found control event key")
+                    try:
+                        key_name = event_list.pop(0)
+                        key_scale = event_list.pop(0)
+                    except IndexError:
+                        raise ValueError("Unable to parse \\key control command") from None
+                    if key_scale not in ("\\major", "\\minor"):
+                        raise ValueError(f"Unsupported mode '{key_scale}'")
+                    if key_scale == "\\minor":
+                        try:
+                            key_name = MINOR_KEY_SIGNATURES[key_name]
+                        except KeyError:
+                            raise ValueError(f"Can't use minor key {key_name}") from None
+
+                    # Before we change the key, yield notes from the previous key
+                    if note_events:
+                        yield MusicDataClass(key, note_events)
+                        note_events = []
+
+                    # Now set the new key and continue
+                    key = key_name
+                    continue
+
+                note_events.append(event)
+
+            # After loop yield remaining events
+            if note_events:
+                yield MusicDataClass(key, note_events)
+
 
     def update_file_source_label(self, label_text):
         """Updates tab source file (concatenates as needed)"""
@@ -324,7 +425,9 @@ class HarpHelperUi(QMainWindow):
         self._tab_source_file_name = filename
         self.update_file_source_label(filename)
         self.sourceFileButton.setChecked(True)
-        if not self.sourceFileLabel.text():
+        if self.sourceFileLabel.text():
+            self.expressionEdit.setEnabled(False)
+        else:
             self.sourceExpressionButton.setChecked(True)
 
     def save_output_dialog(self):
@@ -380,6 +483,7 @@ class HarpHelperUi(QMainWindow):
 
 
 def main():
+    logging.basicConfig(level=logging.INFO)
     harp_helper = HarpHelperUi()
     harp_helper.show()
     harp_helper.exec()
